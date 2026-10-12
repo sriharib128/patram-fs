@@ -427,6 +427,25 @@
   .fsvg .ftype { fill: var(--surface-2); stroke: var(--ink); stroke-width: 1.2; }
   .fsvg .ftype.own { stroke-dasharray: 4 3; }
   .fsvg .ftype-t { font-size: 12.5px; font-weight: 600; fill: var(--ink); }
+
+  /* alternatives: requirements and capability grid */
+  .fig.xwide { width: min(1520px, 100% - 2 * var(--gutter)); }
+  .reqs { padding-left: 1.4em; margin: 0 0 1em; }
+  .reqs li { margin: 0 0 .6em; padding-left: .2em; }
+  .capwrap { overflow-x: auto; overflow-y: hidden; padding: 0 0 6px; }
+  .cap { width: 100%; min-width: 1100px; border-collapse: separate; border-spacing: 5px; font-size: 14px; line-height: 1.35; }
+  .cap th { text-align: left; font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 500; padding: 0 10px 8px; vertical-align: bottom; }
+  .cap td { padding: 11px 12px; vertical-align: top; border-radius: 8px; background: var(--surface-2); }
+  .cap td:first-child { font-weight: 650; width: 15%; background: none; padding-left: 4px; }
+  .cap td:first-child small { margin-top: 2px; color: var(--muted); font-size: 12.5px; font-weight: 400; }
+  .cap td b { display: block; font-size: 12px; font-family: var(--font-mono); letter-spacing: .06em; text-transform: uppercase; margin-bottom: 4px; }
+  .cap td small { display: block; color: var(--ink); font-size: 13px; line-height: 1.4; }
+  .cap td.yes { background: var(--good-wash); } .cap td.yes b { color: var(--good); }
+  .cap td.no { background: var(--bad-wash); } .cap td.no b { color: var(--bad); }
+  .cap td.part { background: var(--orange-wash); } .cap td.part b { color: var(--orange-ink); }
+  .cap tr.ours td:first-child { padding-left: 4px; }
+  .cap tr.ours td.yes { outline: 2px solid var(--good); outline-offset: -2px; }
+
 </style>
 </head>
 <body>
@@ -576,7 +595,7 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
   </figure>
 
   <div class="text">
-    <p><code>read_image</code> and <code>read_annotation</code> are the whole client interface, because an image plus a JSON record is the shape of all our training data. A reader for a new kind of record would be a small addition, not a redesign. The library also has <code>build_uri</code> and <code>parse_uri</code> for making and checking addresses when you build a dataset.</p>
+    <p><code>read_image</code> and <code>read_annotation</code> are the whole client interface, because an image plus a JSON record is the shape of all our training data. The library also has <code>build_uri</code> and <code>parse_uri</code> for making and checking addresses when you build a dataset.</p>
     <p>The promise behind those two calls is simple: calling code reads an address as if the shard were already a file on the machine's local drive. The rest of this post is about how the library and a small program on each machine make that true.</p>
   </div>
 
@@ -609,7 +628,8 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
     </div>
     <p>Every machine in our cluster has a 30 TB NVMe drive attached directly to it. Reading from it takes tens of microseconds, against milliseconds for anything that crosses the network. So the first time a machine needs a shard, it downloads the whole shard from the object store to its local drive. From then on, every sample in that shard is a local read.</p>
     <p>A download is written to a temporary file and renamed into place only when it is complete, so a reader never sees a half-downloaded shard.</p>
-    <p>This creates the next problem. A machine does not run one process. It runs eight training processes, one per GPU, each with several reader processes, and often a data job or a notebook next to them. They start at the same moment, they read the same shards, and they know nothing about each other. If each one downloads a shard whenever it finds it missing, a machine downloads the same 10 GiB shard many times over. An earlier design of ours did exactly that: 16 reader processes missing the same shard caused 16 separate downloads.</p>
+    <p>This creates the next problem. A machine does not run one process. It runs eight training processes, one per GPU, each with several reader processes, and often a data job or a notebook next to them. They start at the same moment, they read the same shards, and they know nothing about each other.</p>
+    <p>If each one downloads a shard whenever it finds it missing, the machine downloads the same 10 GiB shard many times over. An earlier design of ours did exactly that: 16 reader processes missing the same shard caused 16 separate downloads.</p>
   </div>
 
   <details class="deep" id="deep-names">
@@ -639,7 +659,8 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
       <h2>One daemon per machine</h2>
       <p class="lead">A single small program on each machine handles every missing shard, so a shard is downloaded once, however many processes want it.</p>
     </div>
-    <p>Each machine runs one Patram-FS daemon: a small background program, written in Go, that runs all the time. Every process on the machine, whether training, a data job or a notebook, talks to the same daemon through a Unix domain socket. That is a channel between processes on one machine that goes only through the kernel, with no network in the way. From Python, a round trip takes a median of 74 microseconds, and 20 processes together pushed 124,000 requests per second through it.</p>
+    <p>Each machine runs one Patram-FS daemon: a small background program, written in Go, that runs all the time. Every process on the machine, whether training, a data job or a notebook, talks to the same daemon through a Unix domain socket, a channel between processes on one machine that goes only through the kernel, with no network in the way.</p>
+    <p>The socket is quick. From Python, a round trip takes a median of 74 microseconds, and 20 processes together pushed 124,000 requests per second through it.</p>
     <p>When a process needs a shard that is not on the local disk, it sends the daemon an <code>ensure_shard</code> request. The daemon checks the disk and starts a download only if the shard is not there and is not already downloading. Any other process that asks for the same shard during the download waits for that same download, and they all continue together when it finishes.</p>
   </div>
 
@@ -668,7 +689,7 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
   <div class="text">
     <p>We measured this with 20 processes asking for the same missing 1 GiB shard at the same instant. The daemon made one download, and all 20 processes had the shard in 2.16 seconds, the time a single process takes on its own. Asking for a shard that is already on the disk takes under 100 microseconds.</p>
     <p>The daemon never handles the data itself. It answers one question, "is this shard on the local disk, and where?", and the process then reads the bytes on its own. So the daemon cannot become a bandwidth bottleneck, and restarting it cannot break a read in progress, because each reader holds its own open file.</p>
-    <p>Having one daemon per machine also gives every machine-wide question a single place to be answered: how hard to hit the object store, what is already cached, how many bytes this machine has downloaded today, whether the object store is reachable right now. Each has one place to ask and one place to tune, instead of a hundred workers that know nothing about each other. Every daemon publishes these numbers as Prometheus metrics, so the whole cluster reads as one Grafana dashboard.</p>
+    <p>Having one daemon per machine also gives every machine-wide question one place to be answered: how hard to hit the object store, what is already cached, how many bytes this machine has downloaded today. Every daemon publishes these numbers as Prometheus metrics, so the whole cluster reads as one Grafana dashboard.</p>
   </div>
 
   <figure class="fig">
@@ -742,8 +763,9 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
   </figure>
 
   <div class="text">
-    <p>Each process also keeps a few shard files open (16 of each kind by default), so repeated reads from the same shard skip even the open. In the steady state, the client does nothing that a plain local read would not do: the file is already open, <code>pread</code> runs, and the daemon is not involved.</p>
-    <p>The read path is also short. An uncompressed TAR member needs no decoding of its own, so there is no unpacking, no decompression and no format conversion between the drive and your tensor, and no filesystem layer in between. The only real wait anywhere in the system is the first download of a shard. Because <code>ensure_shard</code> can be called for a shard you have not reached yet, a data loader can fetch the next shard while it is still training on the current one, so even that wait overlaps with useful work.</p>
+    <p>Each process also keeps a few shard files open (16 of each kind by default), so repeated reads from the same shard skip even the open. In the steady state the file is already open, <code>pread</code> runs, and the daemon is not involved.</p>
+    <p>There is nothing else on the read path. An uncompressed TAR member needs no decoding of its own, so there is no unpacking, no decompression, no format conversion and no filesystem layer between the drive and your tensor.</p>
+    <p>The only real wait in the system is the first download of a shard. Because <code>ensure_shard</code> can be called for a shard you have not reached yet, a data loader can fetch the next shard while it is still training on the current one, so even that wait overlaps with useful work.</p>
   </div>
 </section>
 
@@ -757,23 +779,13 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
     <p>An annotation shard is a 1 GiB JSONL file holding millions of small records of about 300 bytes each. During training, each worker needs a few records at a time, from scattered places in the file, and every worker on the machine is doing this at once. There are two obvious ways to give the workers their records, and each fails in its own way.</p>
     <ol class="steps">
       <li><strong>Load the whole file into every worker.</strong> Each worker reads all 1 GiB into its own memory and looks records up there. Lookups are fast, but workers cannot share their memory with each other, so 100 workers hold 100 copies of the same file: 100 GiB of memory for 1 GiB of data, and every worker waits for the load before it can start.</li>
-      <li><strong>Read only the bytes you need, straight from the drive.</strong> Keep the file on the local NVMe drive and, for each record, read just its bytes at its offset with <code>pread</code>, the same way images are read. Memory use stays small. But every record is now a separate trip to the drive, taking a median of 297.6 microseconds for a 300-byte record. Training makes millions of these reads, all the workers send them to the same drive, and they queue behind each other. The drive becomes the bottleneck.</li>
+      <li><strong>Read only the bytes you need, straight from the drive.</strong> Keep the file on the local NVMe drive and read just each record's bytes at its offset with <code>pread</code>, the way images are read. Memory use stays small. But every record is a separate trip to the drive, a median of 297.6 microseconds for a 300-byte record. Training makes millions of these reads, all from the same drive, and they queue behind each other. The drive becomes the bottleneck.</li>
     </ol>
     <p>What we want is the second approach's small reads, answered from memory, with one copy of the file for the whole machine. Linux already has the piece that makes this possible.</p>
     <p><strong>The page cache.</strong> Whenever a process reads part of a file, the kernel keeps those bytes in spare memory. The next time any process on the machine reads the same bytes, the kernel answers from memory and does not touch the drive. There is one copy of each piece of the file, shared by every process.</p>
-    <p>On its own, the page cache fills slowly here. A scattered read brings in only the small piece of the file around one record, so for a long time most reads still miss and go to the drive. <strong>Warming</strong> fixes that. When an annotation shard is first fetched, the client sends the daemon a <code>warm_shard</code> request, and the daemon asks the kernel to load the whole file into the page cache in one call (<code>madvise</code> with <code>MADV_POPULATE_READ</code>). That takes about half a second for 1 GiB. From then on, the workers keep making exactly the same small <code>pread</code> calls, and every one of them is answered from memory.</p>
+    <p>On its own, the page cache fills too slowly here. A scattered read brings in only the small piece of the file around one record, so for a long time most reads still miss and go to the drive.</p>
+    <p><strong>Warming</strong> fixes that. When an annotation shard is first fetched, the client sends the daemon a <code>warm_shard</code> request, and the daemon asks the kernel to load the whole file into the page cache in one call (<code>madvise</code> with <code>MADV_POPULATE_READ</code>). That takes about half a second for 1 GiB. From then on, the workers keep making exactly the same small <code>pread</code> calls, and every one is answered from memory.</p>
     <p>This is the best of both worlds. Like the first approach, every read comes from memory, so it is fast. Like the second, each worker reads only the record it needs and keeps no copy of its own, so the machine holds one copy of the file, however many workers there are.</p>
-  </div>
-
-  <div class="text">
-    <table class="alt tri">
-      <thead><tr><th>Approach</th><th>Memory on the machine</th><th>Each read</th></tr></thead>
-      <tbody>
-        <tr><td>1. Load the file into every worker</td><td class="bad-c">one full copy per worker</td><td class="good-c">fast: from memory</td></tr>
-        <tr><td>2. Read the bytes from the drive</td><td class="good-c">grows slowly, a piece of the file at a time</td><td class="bad-c">slow: every record is a separate read from the drive</td></tr>
-        <tr class="ours"><td>3. Warm the page cache once</td><td class="good-c">one copy, shared by every worker</td><td class="good-c">fast: from memory</td></tr>
-      </tbody>
-    </table>
   </div>
 
   <figure class="fig">
@@ -813,7 +825,6 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
 
   <div class="text">
     <p>Image shards are never warmed, because reading an image is limited by decoding the JPEG, not by the drive. The deep dive below has the measurements.</p>
-    <p>Warmed data is not locked in memory. The kernel can drop it whenever it needs the memory, so the daemon trusts a finished warm for only a few seconds and warms the file again on the next request after that.</p>
   </div>
 
   <details class="deep" id="deep-warm">
@@ -847,6 +858,8 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
         </tbody>
       </table>
       <p><code>POPULATE_READ</code> takes about 0.5 seconds on a 1 GiB JSONL file and about 5 seconds on a 10 GiB image shard. On a shard that is read from start to end in order, warming gains little, because the kernel already reads ahead. The large gains are on scattered reads, which is how training reads annotations.</p>
+      <h4>Warming does not pin the file</h4>
+      <p>Warmed data is not locked in memory. The kernel can drop it whenever it needs the memory, so the daemon trusts a finished warm for only a few seconds and warms the file again on the next request after that.</p>
     </div>
   </details>
 </section>
@@ -858,7 +871,8 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
       <h2>Keeping the local disk from filling up</h2>
       <p class="lead">A machine's disk holds whichever shards its jobs are using. When it fills up, the shards asked for least recently are removed.</p>
     </div>
-    <p>Each kind of shard has its own space budget on the disk, with an upper mark and a lower mark. When a download pushes a budget over its upper mark, the daemon deletes the shards that were asked for least recently, until usage is back under the lower mark. Going down to the lower mark, not just under the upper one, leaves room for several more downloads before the next clean-up. When the daemon is deployed across the cluster, the budgets are sized to each machine's free space on its drive, with a safety margin, because other work on the machine uses the same drive.</p>
+    <p>Each kind of shard has its own space budget on the disk, with an upper mark and a lower mark. When a download pushes a budget over its upper mark, the daemon deletes the shards that were asked for least recently, until usage is back under the lower mark.</p>
+    <p>Going down to the lower mark, not just under the upper one, leaves room for several more downloads before the next clean-up.</p>
   </div>
 
   <figure class="fig">
@@ -896,9 +910,10 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
       <p class="lead">The daemon makes all the processes on a machine act like one client, without the processes ever talking to each other.</p>
     </div>
     <p>Nothing outside the daemon knows where shards come from. Everywhere this post says "the object store", it means one download routine inside the daemon. That routine calls rclone, an open-source tool that works with every major object store and with many on-premises storage systems. Moving to a different cloud, or to storage in our own data centre, means changing that one routine. Training loops, data pipelines and every sample address stay exactly as they are.</p>
-    <p>Images and JSONL records are only the two kinds of data we needed first. The daemon does not care what is inside a shard: it fetches, caches, warms and evicts files. A shard can hold text, speech audio, video frames or any custom format, and a new reader function decides how to turn the bytes at an address into a sample, with whatever processing that kind of data needs. Each new kind also gets its own warming choice, made the same way we made it for images and JSONL: by measuring whether reads wait on the drive.</p>
-    <p>The idea reaches beyond shards. On a busy machine, many processes that know nothing about each other need the same shared things: the same files from the object store, the same rows from a database, the same space on the drive, the same memory. Left alone, each process fetches, queries and caches for itself, and every shared service sees dozens of separate clients from every machine. Making the processes coordinate directly would mean each one knowing about all the others.</p>
-    <p>A daemon on each machine avoids both. Each process asks its local daemon, and only the daemon talks to the shared service. Because every request on the machine passes through one place, the daemon can merge identical requests, batch the rest into one query, keep one cache, and limit how hard the machine hits the service. The processes never talk to each other, and together they still behave like one well-behaved client.</p>
+    <p>Images and JSONL records are only the two kinds of data we needed first. The daemon does not care what is inside a shard: it fetches, caches, warms and evicts files.</p>
+    <p>A shard can hold text, speech audio, video frames or any custom format. A new reader function decides how to turn the bytes at an address into a sample, and each new kind gets its own warming choice, made the way we made it for images and JSONL: by measuring whether reads wait on the drive.</p>
+    <p>The idea reaches beyond shards. On a busy machine, many processes that know nothing about each other need the same shared things: files from the object store, rows from a database, space on the drive, memory. Left alone, each process fetches, queries and caches for itself, and every shared service sees dozens of separate clients from every machine. Making the processes coordinate directly would mean each one knowing about all the others.</p>
+    <p>A daemon on each machine avoids both. Each process asks its local daemon, and only the daemon talks to the shared service. Because every request on the machine passes through one place, the daemon can merge identical requests, batch the rest into one query, keep one cache, and limit how hard the machine hits the service.</p>
   </div>
 
   <figure class="fig">
@@ -910,7 +925,7 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
 
   <div class="text">
     <p>Patram-FS uses the pattern three times. Requests for the same shard become one download, from any object store. Record lookups from every process become one batched database query. And the drive and the page cache hold one copy of each shard, under one budget, for every process on the machine.</p>
-    <p>Any shared service that many processes on a machine use in the same way can be put behind a daemon like this one. The rule that keeps it safe is the one Patram-FS follows throughout: the daemon answers questions and coordinates, and the data itself goes directly from the drive to the process, so the daemon never becomes the bottleneck.</p>
+    <p>Any shared service that many processes on a machine use in the same way can be put behind a daemon like this one. What keeps it safe is the rule Patram-FS follows throughout: the daemon answers questions and coordinates, and the data goes directly from the drive to the process, so the daemon never becomes the bottleneck.</p>
   </div>
 </section>
 
@@ -952,29 +967,43 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
   <div class="text">
     <div class="chapter-head">
       <p class="eyebrow"><b>10</b> Alternatives</p>
-      <h2>Why we did not use an existing tool</h2>
-      <p class="lead">Good tools exist for this problem. Each one missed one of our requirements.</p>
+      <h2>Why we built Patram-FS instead of using an existing tool</h2>
+      <p class="lead">This is a niche area with only a few tools, and none of them meets every requirement.</p>
     </div>
-    <p>Before building Patram-FS we compared it with three kinds of existing tools. Two requirements decided it. First, on our machines many unrelated processes read the same data at the same time, so the cache has to belong to the machine, not to one job. Second, the data has to stay in plain files with no conversion step. Our shards are ordinary uncompressed TAR and JSONL files: any tool can open them, building them is plain copying, and reading a sample is a single <code>pread</code> with nothing to decode except the image or JSON itself. A tool that needs its own format adds a full pass of reading and rewriting the whole dataset to get in, another to get back out for tools that do not speak that format, and work on every read to unpack it.</p>
+    <p>Serving shared training data from object storage to many processes on one machine is a narrow problem, and few tools aim at it. We found five that come close: two dataset libraries, a distributed cache and two filesystems that mount a bucket. We read their documentation and source. Our workload needs five things at once:</p>
+    <ol class="reqs">
+      <li><strong>One cache per machine, shared by every process.</strong> A machine runs training, data generation and notebooks side by side. They do not know about each other, and they read the same shards.</li>
+      <li><strong>Reads at local-disk speed.</strong> An epoch is tens of millions of reads, so nothing should sit between a process and the file on each one.</li>
+      <li><strong>Plain files.</strong> Shards stay ordinary uncompressed TAR and JSONL, so any tool can open them and nothing is converted. Tools with their own format make you pack the whole dataset into that format first, and unpack it again for any tool that cannot read it.</li>
+      <li><strong>Little to run.</strong> The machines are there to train. We did not want a cluster of services running on them.</li>
+      <li><strong>Every kind of job, with a small code change.</strong> Training is not the only reader. Data generation, annotation and analysis jobs and notebooks read the same data, mostly as plain Python that opens a file path. Most existing tools are heavily tuned for the PyTorch DataLoader class. To use one, every codebase of ours that reads this data, whether training, annotation or analysis, would have to be rewritten around its dataset class. That is a large rewrite across many codebases.</li>
+    </ol>
+    <p>Each tool below meets some of these and misses at least one.</p>
   </div>
 
-  <figure class="fig">
+  <figure class="fig xwide">
     <div class="card">
-      <div class="fig-head"><div><h3>Existing tools compared with our requirements</h3><p>What each kind of tool does well, and what it would have cost us.</p></div></div>
-      <table class="alt">
-        <thead><tr><th>Approach</th><th>What it does well</th><th>What it would have cost us</th></tr></thead>
-        <tbody>
-          <tr><td>Streaming dataset library<small>for example MosaicML StreamingDataset</small></td><td>Packs samples into shards with an index, supports reading any sample by its position, and is an excellent fit for one coordinated training job.</td><td><strong>Its own format.</strong> Every dataset has to be converted into it, a full extra pass of reading and rewriting every byte of the dataset, and converted back for any tool that cannot read it.<br><strong>A cache per job.</strong> Two unrelated processes cannot share one cache folder, and with separate folders each downloads every shard itself. With training, data jobs and notebooks on one machine, the same shards sit on the drive and in memory several times over, so both fill up with copies.</td></tr>
-          <tr><td>Distributed cache<small>for example Alluxio</small></td><td>Shares one cache across processes and machines, with ordinary files. It would have worked for us.</td><td><strong>More to run.</strong> Master and worker services, a consensus system for high availability and a JVM to tune, all taking memory and CPU from the machines that train, and all needing to stay healthy, for a problem one small program per machine can solve.</td></tr>
-          <tr><td>FUSE filesystem<small>for example JuiceFS</small></td><td>Looks like an ordinary folder, so any program can use it without changes.</td><td><strong>A slower read on every sample.</strong> Each read passes through a user-space process, roughly 1 to 3 ms per image against 50 to 200 µs for a direct read from local NVMe, paid tens of millions of times per epoch. Data written through it is stored in its own chunked format in the object store. If the FUSE process dies, every open file starts returning errors.</td></tr>
-          <tr class="ours"><td>Patram-FS</td><td>Plain uncompressed TAR and JSONL files, no conversion. One cache per machine, shared by every process. Reads at local-disk speed. One small program per machine.</td><td>It is not a filesystem, so code changes one line to read by address instead of by path.</td></tr>
-        </tbody>
-      </table>
+      <div class="fig-head"><div><h3>Existing tools against our five requirements</h3><p>Each tool is read from its own documentation and source code. Green means the tool meets the requirement, orange partly, red not at all.</p></div></div>
+      <div class="capwrap">
+        <table class="cap">
+          <thead><tr><th>Tool</th><th>Cache shared by every process?</th><th>Reads at local-disk speed?</th><th>Files stay plain?</th><th>Little to run?</th><th>Fits every job, with a small change?</th></tr></thead>
+          <tbody>
+          <tr><td>StreamingDataset<small>a library, excellent for one training job</small></td><td class="no"><b>No</b><small>each dataset object has its own cache; two on one folder is an error</small></td><td class="yes"><b>Yes</b><small>seeks in a local shard</small></td><td class="no"><b>No</b><small>must be rewritten into its own MDS format</small></td><td class="yes"><b>Yes</b><small>just a library</small></td><td class="no"><b>No</b><small>built around a training data loader; other jobs adopt its dataset class and format</small></td></tr>
+          <tr><td>WebDataset<small>TAR shards, the closest to our format</small></td><td class="no"><b>No</b><small>every process downloads for itself, no coordination</small></td><td class="part"><b>Partly</b><small>random access needs a second library and a local copy per worker</small></td><td class="yes"><b>Yes</b><small>TAR files</small></td><td class="yes"><b>Yes</b><small>just a library</small></td><td class="no"><b>No</b><small>built around a streaming training pipeline; other jobs adopt its loader</small></td></tr>
+          <tr><td>Alluxio<small>a distributed cache, would have worked</small></td><td class="yes"><b>Yes</b><small>a worker cache serves every process</small></td><td class="part"><b>Partly</b><small>reads go through its client library</small></td><td class="yes"><b>Yes</b><small>files as they are</small></td><td class="no"><b>No</b><small>masters, workers and a JVM; the open-source edition is scoped to analytics</small></td><td class="yes"><b>Yes</b><small>ordinary paths through its FUSE mount</small></td></tr>
+          <tr><td>JuiceFS<small>a filesystem mounted on the bucket</small></td><td class="yes"><b>Yes</b><small>one cache per mount</small></td><td class="no"><b>No</b><small>a FUSE hop on every read</small></td><td class="no"><b>No</b><small>4 MiB blocks, unreadable without its database</small></td><td class="part"><b>Partly</b><small>a metadata database to run, and the data is unreadable without it</small></td><td class="yes"><b>Yes</b><small>any program, with ordinary paths</small></td></tr>
+          <tr><td>Mountpoint for S3<small>a bucket mounted as a folder, S3 only</small></td><td class="part"><b>Partly</b><small>per mount, cleared when it exits</small></td><td class="no"><b>No</b><small>a FUSE hop on every read, and one S3 request per small file</small></td><td class="yes"><b>Yes</b><small>objects as they are</small></td><td class="yes"><b>Yes</b><small>one process</small></td><td class="part"><b>Partly</b><small>ordinary paths, but built for large sequential reads, not many small ones</small></td></tr>
+          <tr class="ours"><td>Patram-FS<small>what we built</small></td><td class="yes"><b>Yes</b><small>one cache per machine, for any process</small></td><td class="yes"><b>Yes</b><small>a direct read of the local file</small></td><td class="yes"><b>Yes</b><small>plain TAR and JSONL, nothing converted</small></td><td class="yes"><b>Yes</b><small>one small daemon per machine</small></td><td class="yes"><b>Yes</b><small>any job: swap a path for an address, a one-line change</small></td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </figure>
 
   <div class="text">
-    <p>If one coordinated training job is your only workload, a streaming dataset library is an excellent default, and we would recommend it over building your own. Our machines run training, data generation and analysis side by side on the same data, and that is the case Patram-FS is built for.</p>
+    <p><strong>On requests.</strong> A tool that shows a bucket as a folder turns every file read into an S3 request, and S3 limits requests, not bytes: about 5,500 per second for each prefix. With one file per sample, ten million samples means ten million requests, however good the tool is. Packing the samples into TAR shards, which Patram-FS reads as they are, brings that down to about two hundred.</p>
+    <p><strong>On FUSE.</strong> Our first version of this system was a FUSE mount, and each image read cost 1 to 3 ms, against 50 to 200 µs for a direct read from NVMe. A FUSE-based tool pays that extra hop on every read.</p>
+    <p>None of these is a poor tool. They were built for other workloads. If one coordinated training job is your only workload, a streaming dataset library is an excellent default, and it gives you things Patram-FS does not, such as shard-aware sampling and exact resumption on a different number of GPUs. If you need one cache shared across machines, or a normal file path that unmodified programs can open, look at Alluxio or JuiceFS.</p>
   </div>
 </section>
 
@@ -1040,7 +1069,7 @@ ann = read_annotation(uri=<span class="s">"patram://annotation/000123?shard=...&
       <li><b>Put machine-wide coordination in one process, and keep it off the data path</b>A daemon that never carries data cannot slow reads down, and one daemon per machine turns de-duplication, rate limits and monitoring into local problems.</li>
       <li><b>Ask only on a miss</b>Try the local file first. Once a shard is on the disk, a read is an ordinary local read.</li>
       <li><b>Use the page cache as shared memory</b>Warm a file once and every process on the machine reads it from memory, one copy for all, with no sharing layer of your own.</li>
-      <li><b>Measure each kind of data before choosing defaults</b>The same warming step made annotation reads 2.6 times faster and made no difference for images.</li>
+      <li><b>Measure each kind of data before choosing defaults</b>The same warming step made annotation reads 11 times faster and made no difference for images.</li>
     </ol>
   </div>
 </section>
